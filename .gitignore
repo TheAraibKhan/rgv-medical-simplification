@@ -1,0 +1,34 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.next/
+coverage/
+mlruns/
+qdrant_storage/
+postgres_data/
+data/local/*
+!data/local/.gitkeep
+backend/data/medlineplus/*
+*.log
+
+# GitHub Codespaces
+.codespaces/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Node
+node_modules/
+
+# Local environment
+.env
+.env.local
+frontend/.env.local
+
+# TypeScript build cache
+*.tsbuildinfo
