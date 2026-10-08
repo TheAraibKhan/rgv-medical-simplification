@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+import logging
 
 from app.core.config import settings
 from app.retrieval.medlineplus import retriever
@@ -10,6 +11,8 @@ from app.services.claims import decompose
 from app.services.clinical_structure import structure_medical_report
 from app.services.llm import llm_service
 from app.verification.verifier import verifier
+
+logger = logging.getLogger(__name__)
 
 
 class ResearchPipeline:
@@ -56,11 +59,18 @@ class ResearchPipeline:
             )
             for item in structured.results
         )
-        b1 = self._run_b1(patient_source, mode)
         query_text = "\n".join(structured.retrieval_queries)
         evidence = self._retrieve(query_text, request.top_k, mode)
-        b2 = self._run_b2(patient_source, evidence, mode)
-        b3 = self._run_b3(patient_source, evidence, mode)
+        try:
+            b1 = self._run_b1(patient_source, mode)
+            b2 = self._run_b2(patient_source, evidence, mode)
+            b3 = self._run_b3(patient_source, evidence, mode)
+        except Exception as exc:
+            logger.exception("Explanation stage failed; returning structured extraction only.")
+            fallback = self._structured_only_result(patient_source, mode, str(exc))
+            b1 = fallback
+            b2 = fallback.model_copy(update={"condition": "B2", "evidence": evidence})
+            b3 = fallback.model_copy(update={"condition": "B3", "evidence": evidence})
         return CompareResponse(
             report=request.report,
             findings=findings,
@@ -69,6 +79,24 @@ class ResearchPipeline:
             b1=b1,
             b2=b2,
             b3=b3,
+        )
+
+    @staticmethod
+    def _structured_only_result(report: str, mode: str, error: str) -> ConditionResult:
+        output = (
+            report
+            if report and not report.startswith("No patient-specific result")
+            else "The report was structured, but the explanation stage was unavailable. Review the extracted result table."
+        )
+        return ConditionResult(
+            condition="B1",
+            output=output,
+            claims=[],
+            verifications=[],
+            evidence=[],
+            latency_ms=0.0,
+            mode=mode,
+            correction_note=f"Explanation stage unavailable: {error}",
         )
 
     def _retrieve(self, report: str, top_k: int, mode: str | None = None) -> list[Evidence]:

@@ -5,15 +5,16 @@ import { AnalysisProcessing } from "@/components/AnalysisProcessing";
 import { ComparisonResults } from "@/components/ComparisonResults";
 import { MedicalIcon } from "@/components/MedicalIcon";
 import { ReportWorkspace } from "@/components/ReportWorkspace";
-import { compare, getServiceMode, InvalidRequestError, uploadReport as uploadDocument, type CompareResponse, type UploadedReport } from "@/lib/api";
+import { compare, getServiceMode, InvalidRequestError, normalizeAnalysisResponse, uploadReport as uploadDocument, type CompareResponse, type UploadedReport } from "@/lib/api";
 
 const landingNavLinks = [
   { label: "How it works", href: "#how-it-works" },
   { label: "About", href: "#about" },
 ];
 
-const workflowSteps = ["Upload", "Read", "Retrieve", "Explain", "Verify"];
+const workflowSteps = ["Upload", "Extract", "Structure", "Reference", "Review"];
 const reportTypes = ["Radiology reports", "Blood reports", "Lab reports", "Discharge summaries", "Clinical notes"];
+type AnalysisState = "IDLE" | "UPLOADING" | "EXTRACTING" | "RETRIEVING" | "GENERATING" | "VERIFYING" | "COMPLETE" | "PARTIAL_SUCCESS" | "ERROR";
 
 export default function Home() {
   const [report, setReport] = useState("");
@@ -24,6 +25,7 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(false);
+  const [analysisState, setAnalysisState] = useState<AnalysisState>("IDLE");
   const [processingStep, setProcessingStep] = useState(0);
   const [error, setError] = useState<Error | null>(null);
   const [serviceMode, setServiceMode] = useState("demo");
@@ -54,27 +56,31 @@ export default function Home() {
       return;
     }
 
+    setAnalysisState("EXTRACTING");
     setLoading(true);
     setError(null);
-    setResult(null);
     let stopProgress = false;
     const progressTask = (async () => {
       for (let step = 0; step < 6; step += 1) {
         if (stopProgress) return;
         setProcessingStep(step);
+        setAnalysisState(step < 2 ? "EXTRACTING" : step < 3 ? "RETRIEVING" : step < 5 ? "GENERATING" : "VERIFYING");
         await new Promise((resolve) => setTimeout(resolve, 620));
       }
     })();
     try {
       const response = await compare(report, topK);
       await progressTask;
+      const normalized = normalizeAnalysisResponse(response);
       setResult(response);
       setServiceMode(response.mode);
+      setAnalysisState(normalized.warnings.length > 0 ? "PARTIAL_SUCCESS" : "COMPLETE");
     } catch (e) {
       stopProgress = true;
       const requestError = e instanceof Error ? e : new Error("The comparison could not be completed.");
       console.warn("COMPARE ERROR", requestError.message);
       setError(requestError);
+      setAnalysisState(result ? "PARTIAL_SUCCESS" : "ERROR");
     } finally {
       stopProgress = true;
       setLoading(false);
@@ -86,6 +92,7 @@ export default function Home() {
     setResult(null);
     setUploadedReport(null);
     setError(null);
+    setAnalysisState("IDLE");
   }
 
   function updateTopK(value: number) {
@@ -94,6 +101,7 @@ export default function Home() {
 
   async function processFile(file: File) {
     setPendingFile(file);
+    setAnalysisState("UPLOADING");
     setUploading(true);
     setUploadError(null);
     setError(null);
@@ -103,6 +111,7 @@ export default function Home() {
       setUploadedReport(uploaded);
       setReport(uploaded.extracted_text);
       setPendingFile(null);
+      setAnalysisState("IDLE");
     } catch (uploadFailure) {
       const requestError = uploadFailure instanceof Error
         ? uploadFailure
@@ -112,6 +121,7 @@ export default function Home() {
         message: requestError.message,
       });
       setUploadError(requestError);
+      setAnalysisState("ERROR");
     } finally {
       setUploading(false);
       if (uploadInput.current) uploadInput.current.value = "";
@@ -125,6 +135,7 @@ export default function Home() {
     setResult(null);
     setUploadError(null);
     setError(null);
+    setAnalysisState("IDLE");
   }
 
   if (loading) {
@@ -151,7 +162,7 @@ export default function Home() {
       />
       <header className="topbar">
         <a className="brand" href="#home" aria-label="RGV Medical Simplification home">
-          <span className="brand-symbol"><span>R</span><i /><span>V</span></span>
+          <span className="brand-symbol medlens-mark"><span /><i /></span>
           <span className="brand-name"><strong>RGV</strong><small>Medical Simplification</small></span>
         </a>
         <nav className="main-nav" aria-label="Main navigation">
@@ -163,6 +174,8 @@ export default function Home() {
         {showingResults ? (
           <ComparisonResults
             result={result}
+            analysisState={analysisState}
+            analysisError={error}
             filename={uploadedReport?.filename ?? null}
             pageCount={uploadedReport?.page_count ?? null}
             documentType={uploadedReport?.source_type ?? "Pasted text"}
@@ -175,9 +188,26 @@ export default function Home() {
           <>
             <section className="hero-layout" aria-labelledby="hero-heading">
               <div className="hero-message">
-                <div className="prototype-tag"><i /> ✓ FREE <span /> RESEARCH PROTOTYPE <span /> NOT A DIAGNOSTIC SYSTEM</div>
-                <h1 id="hero-heading">Understand your medical report,<br /><span>without the medical jargon.</span></h1>
-                <p className="hero-summary">Upload a medical report and receive a clear, evidence-grounded explanation while keeping the original findings visible.</p>
+                <h1 id="hero-heading">Your medical report,<br /><span>made readable.</span></h1>
+                <p className="hero-summary">RGV turns lab reports, scans and clinical notes into a structured view with the original wording kept beside every result.</p>
+              </div>
+              <div className="medlens-hero-visual" aria-hidden="true">
+                <div className="floating-report-card report-card-primary">
+                  <div className="floating-report-top"><span />LAB REPORT</div>
+                  <div className="floating-report-row strong"><b>ApoB</b><i>46.00</i></div>
+                  <div className="floating-report-row"><b>hsCRP</b><i>1.00</i></div>
+                  <div className="floating-report-row"><b>Troponin-I</b><i>4</i></div>
+                </div>
+                <div className="floating-report-card report-card-secondary">
+                  <MedicalIcon name="shield" size={28} />
+                  <strong>Source checked</strong>
+                  <span>Page and row provenance</span>
+                </div>
+                <div className="lens-orbit"><span /><span /><span /></div>
+                <div className="glass-lens"><MedicalIcon name="search" size={42} /></div>
+                <div className="result-chip chip-one">Result</div>
+                <div className="result-chip chip-two">Reference</div>
+                <div className="result-chip chip-three">Pending</div>
               </div>
             </section>
 
@@ -200,17 +230,17 @@ export default function Home() {
 
             <div className="trust-pills" aria-label="Privacy and supported formats">
               <span><MedicalIcon name="lock" size={15} />Private by design</span>
-              <span><MedicalIcon name="check" size={15} />{serviceMode === "demo" ? "Synthetic demo mode" : "Local research mode"}</span>
+              <span><MedicalIcon name="check" size={15} />{serviceMode === "demo" ? "Sample-safe mode" : "Local review mode"}</span>
               <span>PDF · TXT · DOCX</span>
               <span>PNG/JPG with local OCR</span>
             </div>
             <p className="landing-privacy-note">
-              {serviceMode === "demo" ? "Demo mode — use synthetic/open reports only. " : "Research mode — local processing only. "}
+              {serviceMode === "demo" ? "Sample-safe mode - use synthetic/open reports only. " : "Local review mode - local processing only. "}
               Do not upload sensitive patient information.
             </p>
 
             <section className="supported-section" aria-labelledby="supported-heading">
-              <span className="section-label">REPORTS RGV CAN HELP EXPLAIN</span>
+              <span className="section-label">REPORTS RGV CAN HELP READ</span>
               <h2 id="supported-heading">Works with common medical documents</h2>
               <div className="report-type-list">
                 {reportTypes.map((type) => <span key={type}>{type}</span>)}
@@ -219,7 +249,7 @@ export default function Home() {
             </section>
 
             <section className="process-section" id="how-it-works" aria-labelledby="process-heading">
-              <div className="process-heading"><span className="section-label">A SIMPLE, CAREFUL PROCESS</span><h2 id="process-heading">From report to understanding</h2></div>
+              <div className="process-heading"><span className="section-label">A SIMPLE, CAREFUL PROCESS</span><h2 id="process-heading">From report to readable results</h2></div>
               <ol className="process-steps">
                 {workflowSteps.map((step, index) => (
                   <li key={step}><span>{String(index + 1).padStart(2, "0")}</span><strong>{step}</strong></li>
@@ -236,8 +266,8 @@ export default function Home() {
 
         <footer className="site-footer">
           <div className="footer-main">
-            <a className="brand" href="#home"><span className="brand-symbol"><span>R</span><i /><span>V</span></span><span className="brand-name"><strong>RGV</strong><small>Medical Simplification</small></span></a>
-            <p id="about">Clear, evidence-grounded explanations for medical reports. Research prototype, not a diagnostic system.</p>
+            <a className="brand" href="#home"><span className="brand-symbol medlens-mark"><span /><i /></span><span className="brand-name"><strong>RGV</strong><small>Medical Simplification</small></span></a>
+            <p id="about">Clear, source-grounded explanations for medical reports. Review tool, not a diagnostic system.</p>
           </div>
           {!showingResults && <div className="footer-nav"><a href="#how-it-works">How it works</a><a href="#try-it">Upload a report</a></div>}
           <div className="footer-legal"><span>Research prototype · {serviceMode.toUpperCase()} mode</span><span>Not a diagnostic system. Do not upload sensitive patient information.</span></div>

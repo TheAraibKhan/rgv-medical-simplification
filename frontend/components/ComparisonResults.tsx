@@ -476,7 +476,7 @@ function ClinicianWorkflow({
           "CONTEXT CLASSIFICATION",
           "RETRIEVAL-ELIGIBLE CONCEPTS",
           "RETRIEVED EVIDENCE",
-          "AI EXPLANATION",
+          "PLAIN-LANGUAGE EXPLANATION",
           "VERIFICATION",
           "OUTPUT",
         ].map((step, index) => <li key={step}><span>{String(index + 1).padStart(2, "0")}</span>{step}</li>)}
@@ -531,7 +531,7 @@ function ClinicianWorkflow({
       </details>
 
       <details className="workflow-stage">
-        <summary className="workflow-stage-heading"><span className="workflow-stage-index">06</span><span><small>AI EXPLANATION</small><strong>B3 patient-oriented explanation</strong></span><b>{result.b3.mode.toUpperCase()}</b></summary>
+        <summary className="workflow-stage-heading"><span className="workflow-stage-index">06</span><span><small>PLAIN-LANGUAGE EXPLANATION</small><strong>Patient-oriented explanation</strong></span><b>{result.b3.mode.toUpperCase()}</b></summary>
         <div className="workflow-stage-content"><p className="clinician-explanation">{result.b3.output}</p></div>
       </details>
 

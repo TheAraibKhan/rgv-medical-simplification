@@ -55,7 +55,7 @@ _TEST_ALIASES: tuple[tuple[str, str, str | None, re.Pattern[str]], ...] = (
     ("High-sensitivity Troponin-I", "hs-Troponin I", None, re.compile(r"\b(?:high[- ]sensitivity\s+)?troponin\s*[- ]?\s*i\b", re.I)),
     ("Hemoglobin A1c", "HbA1c", "HbA1c", re.compile(r"\b(?:hemoglobin\s*a1c|hba1c)\b", re.I)),
     ("Estimated average glucose", "eAG", "eAG", re.compile(r"\b(?:estimated\s+average\s+glucose|eag)\b", re.I)),
-    ("Fasting glucose", "Fasting glucose", None, re.compile(r"\b(?:fasting\s+glucose|glucose\s*\(\s*fasting\s*\))\b", re.I)),
+    ("Fasting glucose", "Fasting glucose", None, re.compile(r"\b(?:fasting\s+glucose|glucose\s*,?\s*fasting|glucose\s*\(\s*fasting\s*\))\b", re.I)),
     ("Lipid profile", "Lipid profile", None, re.compile(r"\b(?:lipid\s+(?:profile|panel))\b", re.I)),
     ("Glucose", "Glucose", None, re.compile(r"\bglucose\b", re.I)),
     ("Total cholesterol", "Total cholesterol", None, re.compile(r"\btotal\s+cholesterol\b", re.I)),
@@ -99,6 +99,11 @@ _PATIENT_METADATA_RE = re.compile(
     r"collected\s+at|specimen\s*(?:id|type))\s*[:=]",
     re.I,
 )
+_NON_RESULT_FRAGMENT_RE = re.compile(
+    r"\b(?:any condition that shortens erythrocyte|test results released|"
+    r"sample collected|specimen received|methodology|important instructions?)\b",
+    re.I,
+)
 _GENERAL_CONTEXT_RE = re.compile(
     r"\b(?:associated\s+with|future\s+risk|risk\s+of|for\s+example|example\s+of|"
     r"discussed\s+as|may\s+increase\s+the\s+risk|can\s+increase\s+the\s+risk)\b",
@@ -132,6 +137,7 @@ _TABLE_RESULT_RE = re.compile(
     r"^\s*(?P<name>[^|]+?)\s*\|\s*(?P<value>[^|]*)\s*\|\s*"
     r"(?P<unit>[^|]*)\s*(?:\|\s*(?P<tail>.*))?$"
 )
+_SPACE_TABLE_SPLIT_RE = re.compile(r"\t+|\s{2,}")
 
 
 def _classify_heading(text: str) -> ReportSectionType | None:
@@ -144,15 +150,74 @@ def _classify_heading(text: str) -> ReportSectionType | None:
     return None
 
 
+def _lookup_text(name: str) -> str:
+    text = name.replace("|", " I ")
+    text = re.sub(r"\bmg\s*[lI1]\s*L\b", "mg/L", text, flags=re.I)
+    text = re.sub(r"\btroponin\s*-\s*i\b", "troponin-i", text, flags=re.I)
+    text = re.sub(r"\bc\s+reactive\b", "c-reactive", text, flags=re.I)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _canonical_test(name: str) -> tuple[str, str | None, str | None]:
+    lookup = _lookup_text(name)
     for canonical, short_name, abbreviation, pattern in _TEST_ALIASES:
-        if pattern.search(name):
+        if pattern.search(lookup):
             return canonical, short_name, abbreviation
     return name.strip(" :|-\t"), None, None
 
 
 def _is_known_test_name(name: str) -> bool:
-    return any(pattern.search(name) for _, _, _, pattern in _TEST_ALIASES)
+    lookup = _lookup_text(name)
+    return any(pattern.search(lookup) for _, _, _, pattern in _TEST_ALIASES)
+
+
+def _table_cells(text: str) -> list[str]:
+    table_text = re.sub(r"(troponin\s*-\s*)\|", r"\1 I ", text, flags=re.I)
+    if "|" in table_text:
+        return [cell.strip() for cell in table_text.strip().strip("|").split("|")]
+    return [cell.strip() for cell in _SPACE_TABLE_SPLIT_RE.split(table_text.strip()) if cell.strip()]
+
+
+def _table_result_parts(text: str) -> tuple[str, str, str | None, str] | None:
+    cells = _table_cells(text)
+    if len(cells) < 2:
+        return None
+
+    source_name = cells[0].strip(" :|-\t")
+    if not _is_known_test_name(source_name):
+        for index in range(1, min(len(cells), 4)):
+            candidate = " ".join(cells[: index + 1]).strip(" :|-\t")
+            if _is_known_test_name(candidate):
+                source_name = candidate
+                cells = [candidate] + cells[index + 1:]
+                break
+    if not _is_known_test_name(source_name):
+        return None
+
+    raw_value = cells[1].strip() if len(cells) > 1 else ""
+    unit: str | None = None
+    tail_parts: list[str] = []
+
+    if len(cells) >= 3:
+        unit = cells[2].strip().replace("mglL", "mg/L").replace("mgIL", "mg/L") or None
+        tail_parts = cells[3:]
+    else:
+        value_match = _VALUE_RE.fullmatch(raw_value)
+        if value_match:
+            raw_value = value_match.group("value").strip()
+            unit = re.sub(r"\s+", "", value_match.group("unit") or "") or None
+
+    if unit and not re.fullmatch(
+        r"%|mg\s*/\s*dL|mg\s*/\s*L|ng\s*/\s*L|ng\s*/\s*mL|"
+        r"Âµg\s*/\s*L|ug\s*/\s*L|g\s*/\s*dL|mmol\s*/\s*L|Âµmol\s*/\s*L|"
+        r"U\s*/\s*L|mIU\s*/\s*L|pg\s*/\s*mL",
+        unit,
+        re.I,
+    ):
+        tail_parts.insert(0, unit)
+        unit = None
+
+    return source_name, raw_value, unit, " ".join(part for part in tail_parts if part).strip()
 
 
 def _pending_status_header(text: str) -> bool:
@@ -195,10 +260,13 @@ def _is_ocr_artifact(text: str) -> bool:
     return bool(
         re.fullmatch(r"\d+(?:\s+\d+){2,}", compact)
         or re.search(r"\b(\S{1,4})(?:\s+\1){2,}\b", compact, re.I)
+        or _NON_RESULT_FRAGMENT_RE.search(compact)
     )
 
 
 def _known_test_row(text: str) -> bool:
+    if _table_result_parts(text) is not None:
+        return True
     table_match = _TABLE_RESULT_RE.match(text)
     if table_match and _is_known_test_name(table_match.group("name")):
         return True
@@ -392,13 +460,20 @@ def _has_clinical_concept(text: str) -> bool:
     return any(pattern.search(text) for _, pattern in _CLINICAL_CONCEPTS)
 
 
-def _reference_interval(tail: str) -> str | None:
+def _strip_reference_unit(reference: str, unit: str | None) -> str:
+    if not unit:
+        return reference.strip()
+    unit_pattern = re.compile(rf"\s*{re.escape(unit)}\s*$", re.I)
+    return unit_pattern.sub("", reference).strip()
+
+
+def _reference_interval(tail: str, unit: str | None = None) -> str | None:
     match = _REFERENCE_RE.search(tail.strip())
     value = next((part for part in match.groups() if part), None) if match else None
     if value is None:
         plain_match = _PLAIN_REFERENCE_RE.match(tail.strip())
         value = plain_match.group(1) if plain_match else None
-    return value.strip(" ()") if value else None
+    return _strip_reference_unit(value.strip(" ()"), unit) if value else None
 
 
 def _result_from_line(line: _Line) -> StructuredTestResult | None:
@@ -430,17 +505,13 @@ def _result_from_line(line: _Line) -> StructuredTestResult | None:
             source_span=line.span,
         )
 
-    table_match = _TABLE_RESULT_RE.match(line.text)
-    if table_match:
-        source_name = table_match.group("name").strip()
-        if not _is_known_test_name(source_name):
-            return None
+    table_parts = _table_result_parts(line.text)
+    if table_parts is not None:
+        source_name, raw_value, raw_unit, tail = table_parts
         canonical, short_name, abbreviation = _canonical_test(source_name)
-        raw_value = table_match.group("value").strip()
-        unit = re.sub(r"\s+", "", table_match.group("unit") or "") or None
-        tail = table_match.group("tail") or ""
         pending = bool(_PENDING_TEST_ROW_RE.match(line.text))
         value_match = _VALUE_RE.search(raw_value)
+        unit = re.sub(r"\s+", "", raw_unit or value_match.group("unit") or "") or None if value_match else raw_unit
         value = value_match.group("value").strip() if value_match and not pending else None
         flag_match = _FLAG_RE.search(tail)
         return StructuredTestResult(
@@ -451,7 +522,7 @@ def _result_from_line(line: _Line) -> StructuredTestResult | None:
             abbreviation=abbreviation,
             value=value,
             unit=unit,
-            reference_interval=_reference_interval(tail),
+            reference_interval=_reference_interval(tail, unit),
             flag=flag_match.group(1).upper() if flag_match else None,
             status="pending" if pending else "reported" if value else "not_available",
             section=ReportSectionType.TEST_RESULT,
@@ -508,7 +579,7 @@ def _result_from_line(line: _Line) -> StructuredTestResult | None:
         abbreviation=abbreviation,
         value=value,
         unit=unit,
-        reference_interval=_reference_interval(tail),
+        reference_interval=_reference_interval(tail, unit),
         flag=flag,
         status=status,
         section=ReportSectionType.TEST_RESULT,
@@ -748,6 +819,16 @@ def structure_medical_report(raw_text: str) -> StructuredMedicalReport:
             pending_status_lines.append((line, _pending_test_names(line.text)))
             continue
 
+        if _is_ocr_artifact(line.text):
+            excluded_items.append(ExcludedReportItem(
+                source_text=source_text,
+                section=line.section,
+                reason="TABLE_EXTRACTION_ARTIFACT",
+                source_page=line.page,
+                source_span=line.span,
+            ))
+            continue
+
         reference_result = _reference_result_from_line(line)
         if reference_result is not None:
             _register_result(reference_result, results_by_name, excluded_items)
@@ -854,14 +935,6 @@ def structure_medical_report(raw_text: str) -> StructuredMedicalReport:
                 source_text=source_text,
                 section=line.section,
                 reason=line.section.value,
-                source_page=line.page,
-                source_span=line.span,
-            ))
-        elif _is_ocr_artifact(line.text):
-            excluded_items.append(ExcludedReportItem(
-                source_text=line.text,
-                section=ReportSectionType.UNKNOWN,
-                reason="TABLE_EXTRACTION_ARTIFACT",
                 source_page=line.page,
                 source_span=line.span,
             ))

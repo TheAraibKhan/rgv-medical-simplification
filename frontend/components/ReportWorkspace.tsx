@@ -60,7 +60,7 @@ export function ReportWorkspace({
   const errorTitle = {
     connection: "Backend connection unavailable",
     "invalid-request": "Invalid comparison request",
-    backend: "Analysis unavailable",
+    backend: "Review unavailable",
     response: "Unexpected backend response",
   }[errorCategory];
   const uploadSize = uploadedReport ? `${(uploadedReport.file_size_bytes / 1024).toFixed(1)} KB` : "";
@@ -81,9 +81,9 @@ export function ReportWorkspace({
             onDrop={dropFile}
           >
             <span className="upload-icon"><MedicalIcon name="report" size={26} /></span>
-            <strong>{uploading ? "Reading your report…" : "Drop your report here"}</strong>
+            <strong>{uploading ? "Reading the document..." : "Place your report here"}</strong>
             <p>PDF · TXT · DOCX · Images</p>
-            <span className="browse-report">{uploading ? "Preparing report…" : "Choose File"}</span>
+            <span className="browse-report">{uploading ? "Preparing document..." : "Choose file"}</span>
             <small>Up to 20 MB · PNG/JPG text extraction requires local OCR</small>
           </div>
         )}
@@ -139,11 +139,11 @@ export function ReportWorkspace({
             </div>
 
             <p className="privacy-notice">
-              {mode === "demo" ? "Demo mode — use synthetic/open medical reports only. " : "Research mode — local processing only. "}
+              {mode === "demo" ? "Sample-safe mode - use synthetic/open medical reports only. " : "Local review mode - local processing only. "}
               <strong>Do not upload sensitive patient information.</strong>
             </p>
             <button className="compare-button" type="submit" disabled={loading || uploading || report.trim().length < 5}>
-              <MedicalIcon name="spark" size={17} />{error ? "Try analysis again" : "Analyze Report"}<MedicalIcon name="arrow" size={16} />
+              <MedicalIcon name="search" size={17} />{error ? "Review again" : "Review report"}<MedicalIcon name="arrow" size={16} />
             </button>
           </>
         )}

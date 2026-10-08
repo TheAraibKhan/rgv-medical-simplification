@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "RGV — Medical Simplification",
-  description: "Research prototype exploring retrieval-grounded verification for patient-oriented medical report simplification.",
+  title: "MedLens - Clinical Report Clarity",
+  description: "A source-grounded medical report reader for clearer lab, scan and clinical note review.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

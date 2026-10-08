@@ -29,11 +29,11 @@ def test_sections_results_and_provenance_are_structured_from_report_spans() -> N
     results = {item.short_name: item for item in structured.results}
     assert results["ApoB"].value == "46.00"
     assert results["ApoB"].unit == "mg/dL"
-    assert results["ApoB"].reference_interval == "46-174 mg/dL"
+    assert results["ApoB"].reference_interval == "46-174"
     assert results["ApoB"].abbreviation == "ApoB"
     assert results["ApoB"].retrieval_eligible is True
     assert results["hsCRP"].value == "1.00"
-    assert results["hsCRP"].reference_interval == "<1.00 mg/L"
+    assert results["hsCRP"].reference_interval == "<1.00"
     assert results["hs-Troponin I"].value == "4"
     assert results["HbA1c"].status == "pending"
     assert results["Fasting glucose"].status == "not_available"
@@ -198,10 +198,14 @@ Troponin-I, Lipid Profile, HbA1c, Glucose, Lp(a), hsCRP
 
     assert len(structured.results) == 7
     assert results_by_name["Apolipoprotein B"].value == "46.00"
+    assert results_by_name["Apolipoprotein B"].unit == "mg/dL"
+    assert results_by_name["Apolipoprotein B"].reference_interval == "46-174"
     assert results_by_name["Apolipoprotein B"].short_name == "ApoB"
     assert results_by_name["Apolipoprotein B"].source_name == "APOLIPOPROTEIN B (Apo B)"
     assert results_by_name["Apolipoprotein B"].source_page is None
     assert results_by_name["High-sensitivity C-reactive protein"].value == "1.00"
+    assert results_by_name["High-sensitivity C-reactive protein"].unit == "mg/L"
+    assert results_by_name["High-sensitivity C-reactive protein"].reference_interval == "<1.00"
     assert results_by_name["High-sensitivity Troponin-I"].value == "4"
     assert results_by_name["High-sensitivity Troponin-I"].unit == "ng/L"
     assert results_by_name["Lipid profile"].value is None
@@ -223,6 +227,70 @@ Troponin-I, Lipid Profile, HbA1c, Glucose, Lp(a), hsCRP
     assert any(item.reason == "TABLE_EXTRACTION_ARTIFACT" for item in structured.excluded_items)
     pending_names = {name for status in structured.pending_statuses for name in status.test_names}
     assert pending_names == {"Lipid profile", "Hemoglobin A1c", "Glucose", "Lipoprotein(a)"}
+
+
+def test_z615_page_aware_extraction_expected_results_and_pending_status() -> None:
+    report = """PATIENT RESULTS
+Test Name                         Result     Unit     Biological Reference Interval
+APOLIPOPROTEIN B (Apo B)          46.00      mg/dL    46-174
+CARDIO C-REACTIVE PROTEIN (hsCRP), SERUM    1.00    mg/L    <1.00
+1 1 1
+COMMENT
+hsCRP is associated with future myocardial infarction, stroke, and cardiovascular risk.
+\f
+PATIENT RESULTS
+Test Name                         Result     Unit     Biological Reference Interval
+High-sensitivity Troponin-I       4          ng/L
+\f
+REFERENCE INTERVAL
+Lipid Profile                     <200       mg/dL
+Test results released as received from the lab.
+\f
+GENERAL INFORMATION
+ASCVD treatment goals are general educational context.
+\f
+RESULT/S TO FOLLOW:
+Troponin-I, Lipid Profile, HbA1c, Glucose, fasting, Lp(a), hsCRP
+\f
+INSTRUCTIONS
+Contact Customer Care for report assistance.
+"""
+
+    structured = structure_medical_report(report)
+    results = {item.test_name: item for item in structured.results}
+    available = {item.test_name for item in structured.results if item.status == "reported"}
+    pending = {item.test_name for item in structured.results if item.status == "pending"}
+
+    assert available == {
+        "Apolipoprotein B",
+        "High-sensitivity C-reactive protein",
+        "High-sensitivity Troponin-I",
+    }
+    assert pending == {"Lipid profile", "Hemoglobin A1c", "Fasting glucose", "Lipoprotein(a)"}
+    assert results["Apolipoprotein B"].value == "46.00"
+    assert results["Apolipoprotein B"].unit == "mg/dL"
+    assert results["Apolipoprotein B"].reference_interval == "46-174"
+    assert results["Apolipoprotein B"].source_page == 1
+    assert results["High-sensitivity C-reactive protein"].value == "1.00"
+    assert results["High-sensitivity C-reactive protein"].unit == "mg/L"
+    assert results["High-sensitivity C-reactive protein"].reference_interval == "<1.00"
+    assert results["High-sensitivity C-reactive protein"].source_page == 1
+    assert results["High-sensitivity Troponin-I"].value == "4"
+    assert results["High-sensitivity Troponin-I"].unit == "ng/L"
+    assert results["High-sensitivity Troponin-I"].source_page == 2
+    assert all(item.test_name != "1 1 1" for item in structured.results)
+    assert all(item.test_name != "Result/s to follow" for item in structured.results)
+    assert all(item.status == "reported" for name, item in results.items() if name in available)
+    assert any(item.reason == "TABLE_EXTRACTION_ARTIFACT" and item.source_text == "1 1 1" for item in structured.excluded_items)
+    assert any(item.reason == "TABLE_EXTRACTION_ARTIFACT" and "Test results released" in item.source_text for item in structured.excluded_items)
+    assert any(item.section == ReportSectionType.COMMENT and item.patient_specific is False for item in structured.general_information)
+    assert all("myocardial infarction" not in item.concept for item in structured.findings)
+    assert "High-sensitivity Troponin-I" not in {
+        name for status in structured.pending_statuses for name in status.test_names
+    }
+    assert "High-sensitivity C-reactive protein" not in {
+        name for status in structured.pending_statuses for name in status.test_names
+    }
 
 
 def test_pdf_page_markers_are_preserved_in_result_provenance() -> None:

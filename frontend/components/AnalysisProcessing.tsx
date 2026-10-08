@@ -3,9 +3,9 @@ import { MedicalIcon } from "@/components/MedicalIcon";
 const steps = [
   { title: "Reading your report", description: "Extracting text and findings" },
   { title: "Identifying clinical concepts", description: "Finding meaningful report findings" },
-  { title: "Retrieving medical information", description: "Searching relevant patient-oriented knowledge" },
-  { title: "Generating explanation", description: "Preparing patient-friendly language" },
-  { title: "Verifying explanation", description: "Checking generated claims" },
+  { title: "Matching reference material", description: "Finding relevant patient-oriented knowledge" },
+  { title: "Preparing explanation", description: "Writing patient-friendly language" },
+  { title: "Checking the wording", description: "Comparing statements with the source report" },
   { title: "Preparing results", description: "Organizing both report views" },
 ];
 
@@ -13,9 +13,9 @@ export function AnalysisProcessing({ activeStep }: { activeStep: number }) {
   return (
     <main className="processing-screen" aria-labelledby="processing-title" aria-live="polite">
       <div className="processing-content">
-        <a className="brand processing-brand" href="#home" aria-label="RGV Medical Simplification">
-          <span className="brand-symbol"><span>R</span><i /><span>V</span></span>
-          <span className="brand-name"><strong>RGV</strong><small>Medical Simplification</small></span>
+        <a className="brand processing-brand" href="#home" aria-label="MedLens">
+          <span className="brand-symbol medlens-mark"><span /><i /></span>
+          <span className="brand-name"><strong>MedLens</strong><small>Clinical Report Clarity</small></span>
         </a>
         <div className="processing-document" aria-hidden="true">
           <span><MedicalIcon name="report" size={27} /></span>
@@ -39,7 +39,7 @@ export function AnalysisProcessing({ activeStep }: { activeStep: number }) {
             );
           })}
         </ol>
-        <p className="processing-privacy">Your report is processed by the RGV research prototype and is not permanently stored by the upload endpoint.</p>
+        <p className="processing-privacy">Your report is processed for review and is not permanently stored by the upload endpoint.</p>
       </div>
     </main>
   );

@@ -82,13 +82,19 @@ def _extract_pdf(content: bytes) -> str:
     try:
         from pypdf import PdfReader
 
-        reader = PdfReader(io.BytesIO(content), strict=True)
-        pages = [
-            page.extract_text(extraction_mode="layout") or ""
-            if page.get_contents() is not None
-            else ""
-            for page in reader.pages
-        ]
+        reader = PdfReader(io.BytesIO(content), strict=False)
+        pages: list[str] = []
+        for page in reader.pages:
+            if page.get_contents() is None:
+                pages.append("")
+                continue
+            try:
+                text = page.extract_text(extraction_mode="layout") or ""
+            except TypeError:
+                text = page.extract_text() or ""
+            if not text.strip():
+                text = page.extract_text() or ""
+            pages.append(text)
         return "\n\f\n".join(pages)
     except Exception as exc:
         raise ReportExtractionError(
@@ -100,7 +106,7 @@ def _pdf_page_count(content: bytes) -> int:
     try:
         from pypdf import PdfReader
 
-        return len(PdfReader(io.BytesIO(content), strict=True).pages)
+        return len(PdfReader(io.BytesIO(content), strict=False).pages)
     except Exception as exc:
         raise ReportExtractionError(
             "The PDF could not be read. Check that it is a valid, text-based PDF."

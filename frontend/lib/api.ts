@@ -44,6 +44,8 @@ export type SourceSpan = {
 
 export type StructuredTestResult = {
   test_name: string;
+  canonical_name?: string | null;
+  source_name?: string | null;
   short_name?: string | null;
   abbreviation?: string | null;
   value?: string | null;
@@ -136,6 +138,19 @@ export type CompareResponse = {
   b3: Condition;
 };
 
+export type NormalizedAnalysisResponse = {
+  raw: CompareResponse;
+  report: string;
+  structuredResults: StructuredTestResult[];
+  availableResults: StructuredTestResult[];
+  pendingResults: StructuredTestResult[];
+  generalInformation: StructuredFinding[];
+  retrievedEvidence: Evidence[];
+  claims: Claim[];
+  verifications: Verification[];
+  warnings: string[];
+};
+
 export type UploadedReport = {
   report_id: string;
   filename: string;
@@ -180,6 +195,11 @@ export class UnexpectedResponseError extends ComparisonError {
 }
 
 const configuredApiBase = process.env.NEXT_PUBLIC_API_URL?.trim() || "/api";
+const isDevelopment = process.env.NODE_ENV !== "production";
+
+function devLog(message: string, data?: Record<string, unknown>): void {
+  if (isDevelopment) console.info(message, data ?? {});
+}
 
 function compareUrl(): string {
   return `${apiBaseUrl()}/compare`;
@@ -260,6 +280,31 @@ function isCompareResponse(value: unknown): value is CompareResponse {
     && value.b3.condition === "B3";
 }
 
+export function normalizeAnalysisResponse(payload: CompareResponse): NormalizedAnalysisResponse {
+  const structured = payload.structured_report;
+  const structuredResults = structured?.results ?? [];
+  const availableResults = structuredResults.filter((item) =>
+    item.status === "reported" && item.value !== undefined && item.value !== null && item.value !== "");
+  const pendingResults = structuredResults.filter((item) =>
+    ["pending", "not_available", "awaited"].includes(item.status.toLowerCase()));
+  const warnings = [payload.b1, payload.b2, payload.b3]
+    .map((condition) => condition.correction_note)
+    .filter((note): note is string => Boolean(note?.trim()));
+
+  return {
+    raw: payload,
+    report: payload.report,
+    structuredResults,
+    availableResults,
+    pendingResults,
+    generalInformation: structured?.general_information ?? [],
+    retrievedEvidence: payload.b3.evidence ?? [],
+    claims: payload.b3.claims ?? [],
+    verifications: payload.b3.verifications ?? [],
+    warnings,
+  };
+}
+
 async function responseDetail(response: Response): Promise<string | null> {
   try {
     const body: unknown = await response.json();
@@ -274,7 +319,7 @@ async function responseDetail(response: Response): Promise<string | null> {
 export async function compare(report: string, top_k = 3): Promise<CompareResponse> {
   const url = compareUrl();
   const requestBody = { report, top_k };
-  console.log("COMPARE REQUEST", {
+  devLog("analysis request started", {
     url,
     method: "POST",
     body: { reportLength: report.length, top_k },
@@ -327,9 +372,15 @@ export async function compare(report: string, top_k = 3): Promise<CompareRespons
     throw new UnexpectedResponseError();
   }
 
-  console.log("COMPARE RESPONSE", {
+  const normalized = normalizeAnalysisResponse(payload);
+  devLog("analysis response received", {
     url,
     status: response.status,
+    structuredResults: normalized.structuredResults.length,
+    availableResults: normalized.availableResults.length,
+    pendingResults: normalized.pendingResults.length,
+    retrievalCount: normalized.retrievedEvidence.length,
+    verificationCount: normalized.verifications.length,
     conditions: [payload.b1.condition, payload.b2.condition, payload.b3.condition],
     modes: [payload.b1.mode, payload.b2.mode, payload.b3.mode],
   });
@@ -340,7 +391,7 @@ export async function uploadReport(file: File): Promise<UploadedReport> {
   const url = `${apiBaseUrl()}/report/upload`;
   const formData = new FormData();
   formData.set("file", file);
-  console.info("REPORT UPLOAD", { url, size: file.size, type: file.type || "unknown" });
+  devLog("upload started", { url, size: file.size, type: file.type || "unknown" });
 
   let response: Response;
   try {
@@ -377,7 +428,7 @@ export async function uploadReport(file: File): Promise<UploadedReport> {
     console.warn("REPORT UPLOAD ERROR", { url, reason: "Response did not match upload schema." });
     throw new UnexpectedResponseError();
   }
-  return {
+  const uploaded = {
     report_id: payload.report_id,
     filename: payload.filename,
     source_type: payload.source_type,
@@ -386,6 +437,13 @@ export async function uploadReport(file: File): Promise<UploadedReport> {
     page_count: typeof payload.page_count === "number" ? payload.page_count : null,
     status: payload.status,
   };
+  devLog("upload completed", {
+    filename: uploaded.filename,
+    sourceType: uploaded.source_type,
+    characters: uploaded.extracted_text.length,
+    pageCount: uploaded.page_count,
+  });
+  return uploaded;
 }
 
 export async function getServiceMode(): Promise<"demo" | "research"> {
