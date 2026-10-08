@@ -22,14 +22,38 @@ class ResearchPipeline:
             settings.app_mode.lower() == "research"
             and llm_service.active_provider == "vllm"
             and settings.verifier_provider.lower() == "vllm"
+            and bool(settings.vllm_model.strip())
+            and bool(settings.verifier_model.strip() or settings.vllm_model.strip())
             and bool(retriever.docs)
+            and llm_service.local_model_available()
         )
         return "research" if research_ready else "demo"
 
     def compare(self, request: CompareRequest) -> CompareResponse:
+        started = time.perf_counter()
         mode = self.active_mode
+
+        structured_started = time.perf_counter()
         structured = structure_medical_report(request.report)
-        patient_source = structured.patient_source_text
+
+        # Demo generation should use only the structured patient-specific
+        # information rather than echoing tens of thousands of raw characters.
+        # The complete raw report is still preserved in structured.raw_source.
+        patient_source = self._generation_source(structured, mode)
+
+        logger.info(
+            "COMPARE start mode=%s report_chars=%d generation_chars=%d top_k=%d",
+            mode,
+            len(request.report),
+            len(patient_source),
+            request.top_k,
+        )
+        logger.info(
+            "COMPARE structure_ms=%.1f results=%d findings=%d",
+            (time.perf_counter() - structured_started) * 1000,
+            len(structured.results),
+            len(structured.findings),
+        )
         findings = [
             Finding(
                 text=item.text,
@@ -59,19 +83,44 @@ class ResearchPipeline:
             )
             for item in structured.results
         )
+        retrieval_started = time.perf_counter()
         query_text = "\n".join(structured.retrieval_queries)
         evidence = self._retrieve(query_text, request.top_k, mode)
+
+        logger.info(
+            "COMPARE retrieval_ms=%.1f evidence=%d",
+            (time.perf_counter() - retrieval_started) * 1000,
+            len(evidence),
+        )
+
         try:
+            b1_started = time.perf_counter()
             b1 = self._run_b1(patient_source, mode)
+            logger.info(
+                "COMPARE b1_ms=%.1f",
+                (time.perf_counter() - b1_started) * 1000,
+            )
+
+            b2_started = time.perf_counter()
             b2 = self._run_b2(patient_source, evidence, mode)
+            logger.info(
+                "COMPARE b2_ms=%.1f",
+                (time.perf_counter() - b2_started) * 1000,
+            )
+
+            b3_started = time.perf_counter()
             b3 = self._run_b3(patient_source, evidence, mode)
+            logger.info(
+                "COMPARE b3_ms=%.1f",
+                (time.perf_counter() - b3_started) * 1000,
+            )
         except Exception as exc:
             logger.exception("Explanation stage failed; returning structured extraction only.")
             fallback = self._structured_only_result(patient_source, mode, str(exc))
             b1 = fallback
             b2 = fallback.model_copy(update={"condition": "B2", "evidence": evidence})
             b3 = fallback.model_copy(update={"condition": "B3", "evidence": evidence})
-        return CompareResponse(
+        response = CompareResponse(
             report=request.report,
             findings=findings,
             structured_report=structured,
@@ -80,6 +129,14 @@ class ResearchPipeline:
             b2=b2,
             b3=b3,
         )
+
+        logger.info(
+            "COMPARE complete_ms=%.1f mode=%s",
+            (time.perf_counter() - started) * 1000,
+            mode,
+        )
+
+        return response
 
     @staticmethod
     def _structured_only_result(report: str, mode: str, error: str) -> ConditionResult:
@@ -98,6 +155,51 @@ class ResearchPipeline:
             mode=mode,
             correction_note=f"Explanation stage unavailable: {error}",
         )
+
+    @staticmethod
+    def _generation_source(structured, mode: str) -> str:
+        if mode != "demo":
+            return structured.patient_source_text
+
+        parts: list[str] = []
+
+        for result in structured.results:
+            if result.status == "reported" and result.value is not None:
+                text = " ".join(
+                    part
+                    for part in (
+                        result.short_name or result.test_name,
+                        result.value,
+                        result.unit,
+                    )
+                    if part
+                )
+
+                if result.reference_interval:
+                    text += f" (reference: {result.reference_interval})"
+
+                parts.append(text)
+
+            elif result.status == "pending":
+                parts.append(
+                    f"{result.short_name or result.test_name}: result pending"
+                )
+
+        for finding in structured.findings:
+            if finding.explanation_eligible:
+                prefix = "No " if finding.negated else ""
+                parts.append(f"{prefix}{finding.text.strip()}")
+
+        compact = "\n".join(
+            dict.fromkeys(
+                part.strip()
+                for part in parts
+                if part and part.strip()
+            )
+        ).strip()
+
+        # Prevent very large demo responses/claim sets.
+        return (compact or structured.patient_source_text)[:6000]
 
     def _retrieve(self, report: str, top_k: int, mode: str | None = None) -> list[Evidence]:
         if (mode or self.active_mode) == "demo":

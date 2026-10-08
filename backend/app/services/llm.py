@@ -4,7 +4,6 @@ import json
 import re
 import time
 import logging
-import time
 from typing import Any
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
@@ -44,7 +43,12 @@ class LLMService:
         self._availability_checked_at = 0.0
         self._server_available = False
         if self.active_provider == "vllm":
-            self.client = OpenAI(base_url=settings.vllm_base_url, api_key=settings.vllm_api_key)
+            self.client = OpenAI(
+                base_url=settings.vllm_base_url,
+                api_key=settings.vllm_api_key,
+                timeout=3.0,
+                max_retries=0,
+            )
 
     def local_model_available(self) -> bool:
         if self.active_provider != "vllm" or self.client is None:
@@ -60,7 +64,7 @@ class LLMService:
             self._server_available = required_models.issubset(model_ids)
             if not self._server_available:
                 logger.warning("Configured local model is not available; using the demo fallback.")
-        except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
+        except Exception as exc:
             self._server_available = False
             logger.warning(
                 "Local OpenAI-compatible model endpoint is unavailable (%s); using the demo fallback.",

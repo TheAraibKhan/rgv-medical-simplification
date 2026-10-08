@@ -19,7 +19,12 @@ class VerificationService:
 
     def __init__(self) -> None:
         self.client = (
-            OpenAI(base_url=settings.vllm_base_url, api_key=settings.vllm_api_key)
+            OpenAI(
+                base_url=settings.vllm_base_url,
+                api_key=settings.vllm_api_key,
+                timeout=3.0,
+                max_retries=0,
+            )
             if settings.verifier_provider.lower() == "vllm" and settings.vllm_model.strip()
             else None
         )

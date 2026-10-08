@@ -306,14 +306,22 @@ export function normalizeAnalysisResponse(payload: CompareResponse): NormalizedA
 }
 
 async function responseDetail(response: Response): Promise<string | null> {
-  try {
-    const body: unknown = await response.json();
-    if (!isRecord(body)) return null;
-    if (typeof body.detail === "string") return body.detail;
-    return null;
-  } catch {
-    return null;
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const bodyText = await response.text();
+  if (!bodyText.trim()) return null;
+
+  if (contentType.includes("json")) {
+    try {
+      const body: unknown = JSON.parse(bodyText);
+      if (!isRecord(body)) return bodyText.slice(0, 4000);
+      if (typeof body.detail === "string") return body.detail;
+      if (typeof body.message === "string") return body.message;
+    } catch {
+      // Keep malformed JSON visible to the development error boundary.
+    }
   }
+
+  return bodyText.slice(0, 4000);
 }
 
 export async function compare(report: string, top_k = 3): Promise<CompareResponse> {
@@ -391,7 +399,13 @@ export async function uploadReport(file: File): Promise<UploadedReport> {
   const url = `${apiBaseUrl()}/report/upload`;
   const formData = new FormData();
   formData.set("file", file);
-  devLog("upload started", { url, size: file.size, type: file.type || "unknown" });
+  devLog("upload request started", {
+    url,
+    method: "POST",
+    filename: file.name,
+    size: file.size,
+    type: file.type || "unknown",
+  });
 
   let response: Response;
   try {
@@ -401,10 +415,28 @@ export async function uploadReport(file: File): Promise<UploadedReport> {
     throw new BackendConnectionError();
   }
 
+  devLog("upload response received", {
+    url,
+    status: response.status,
+    contentType: response.headers.get("content-type") || "unknown",
+  });
+
   if (!response.ok) {
     const detail = await responseDetail(response);
-    console.warn("REPORT UPLOAD ERROR", { url, status: response.status, detail });
-    throw new ComparisonError(detail || "Unable to process the report. Check the file and try again.", "backend");
+    console.warn("REPORT UPLOAD ERROR", {
+      url,
+      status: response.status,
+      detail: isDevelopment ? detail : undefined,
+    });
+    const message = response.status >= 500 && !isDevelopment
+      ? "Unable to process the report. Please try again."
+      : detail || "Unable to process the report. Check the file and try again.";
+    throw new ComparisonError(
+      isDevelopment
+        ? `Upload failed (HTTP ${response.status}) at POST ${url}.${detail ? ` Details: ${detail}` : ""}`
+        : message,
+      "backend",
+    );
   }
 
   let payload: unknown;

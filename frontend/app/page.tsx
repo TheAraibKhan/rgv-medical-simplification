@@ -174,8 +174,6 @@ export default function Home() {
         {showingResults ? (
           <ComparisonResults
             result={result}
-            analysisState={analysisState}
-            analysisError={error}
             filename={uploadedReport?.filename ?? null}
             pageCount={uploadedReport?.page_count ?? null}
             documentType={uploadedReport?.source_type ?? "Pasted text"}
