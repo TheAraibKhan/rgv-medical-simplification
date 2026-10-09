@@ -57,7 +57,7 @@ def decompose(text: str) -> list[Claim]:
         # Demo-safe decomposition: split on conjunctions only when they appear to join independent clauses.
         parts = re.split(r"\s+(?:and|but)\s+(?=(?:your|there|the|no|this|it)\b)", sentence, flags=re.I)
         for part in parts:
-            normalized = part.strip(" .")
+            normalized = re.sub(r"\\s+", " ", part.strip(" .")).strip()
             if not normalized:
                 continue
             claims.append(

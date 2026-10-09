@@ -154,6 +154,8 @@ class VerificationService:
                 "air around the lung": ("pneumothorax",),
                 "does not show a collapsed lung": ("pneumothorax",),
                 "report does not show a collapsed lung": ("pneumothorax",),
+                "the report says there is no fluid around the lungs": ("pleural effusion",),
+                "report says there is no fluid around the lungs": ("pleural effusion",),
                 "lower wall of the heart": ("inferior wall",),
                 "heart's main pumping chamber": ("left ventricular",),
             }

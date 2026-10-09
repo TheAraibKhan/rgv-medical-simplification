@@ -109,7 +109,7 @@ class ResearchPipeline:
             )
 
             b3_started = time.perf_counter()
-            b3 = self._run_b3(patient_source, evidence, mode)
+            b3 = self._run_b3(patient_source, evidence, mode, source_report=structured.raw_source)
             logger.info(
                 "COMPARE b3_ms=%.1f",
                 (time.perf_counter() - b3_started) * 1000,
@@ -158,8 +158,11 @@ class ResearchPipeline:
 
     @staticmethod
     def _generation_source(structured, mode: str) -> str:
+        # Research conditions must receive the actual source report.
+        # Demo mode uses a compact structured representation only to keep
+        # the demonstration fast on very large PDFs.
         if mode != "demo":
-            return structured.patient_source_text
+            return structured.raw_source
 
         parts: list[str] = []
 
@@ -174,10 +177,8 @@ class ResearchPipeline:
                     )
                     if part
                 )
-
                 if result.reference_interval:
                     text += f" (reference: {result.reference_interval})"
-
                 parts.append(text)
 
             elif result.status == "pending":
@@ -187,8 +188,9 @@ class ResearchPipeline:
 
         for finding in structured.findings:
             if finding.explanation_eligible:
-                prefix = "No " if finding.negated else ""
-                parts.append(f"{prefix}{finding.text.strip()}")
+                # finding.text already contains its negation when present.
+                # Do NOT prepend another "No".
+                parts.append(finding.text.strip())
 
         compact = "\n".join(
             dict.fromkeys(
@@ -198,7 +200,6 @@ class ResearchPipeline:
             )
         ).strip()
 
-        # Prevent very large demo responses/claim sets.
         return (compact or structured.patient_source_text)[:6000]
 
     def _retrieve(self, report: str, top_k: int, mode: str | None = None) -> list[Evidence]:
@@ -236,7 +237,7 @@ class ResearchPipeline:
             mode=run_mode,
         )
 
-    def _run_b3(self, report: str, evidence: list[Evidence], mode: str | None = None) -> ConditionResult:
+    def _run_b3(self, report: str, evidence: list[Evidence], mode: str | None = None, source_report: str | None = None) -> ConditionResult:
         start = time.perf_counter()
         run_mode = mode or self.active_mode
         first_pass_output = llm_service.generate(
@@ -246,10 +247,12 @@ class ResearchPipeline:
             mode=run_mode,
         )
         claims = decompose(first_pass_output)
+        verification_source = source_report or report
+
         verifications = [
             verifier.verify(
                 claim,
-                report,
+                verification_source,
                 evidence if claim.claim_type == ClaimType.GENERAL_EXPLANATORY else [],
                 mode=run_mode,
             )
